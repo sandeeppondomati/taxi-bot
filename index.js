@@ -1,77 +1,59 @@
-const { Client, LocalAuth, Poll } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
-const cron = require('node-cron');
-const chromium = require('@sparticuz/chromium');
-const puppeteer = require('puppeteer-core');
-const http = require('http');
-http.createServer((req,res)=>res.end('Bot Running')).listen(process.env.PORT || 3000);
-const TAXI_GROUP_NAME = 'Taxi';
-const DRIVER_MO = '85254776211@c.us';
-const DRIVER_IVAN = '85269900500@c.us';
-const TIMEZONE = 'Asia/Hong_Kong';
+const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys')
+const express = require('express')
+const fs = require('fs')
+const app = express()
+app.use(express.urlencoded({extended:true}))
 
-let taxiGroupId = null;
-let lastPollId = null;
-let pollVotes = {};
+let cfg = { time: '9:00', ampm: 'AM', autoBook: true, taxiNumbers: ['85261234567','85269876543'] }
+try{ if(fs.existsSync('/data/config.json')) cfg = JSON.parse(fs.readFileSync('/data/config.json')) }catch{}
 
+function saveCfg(){ try{fs.mkdirSync('/data',{recursive:true}); fs.writeFileSync('/data/config.json', JSON.stringify(cfg))}catch{} }
+
+// ---- WEB PANEL ----
+app.get('/', (req,res)=> res.send(`
+<html><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:sans-serif;padding:20px;max-width:400px;margin:auto}input,select,button{width:100%;padding:12px;margin:8px 0;border-radius:10px;border:1px solid #ccc}button{background:#25D366;color:#fff;font-weight:bold;border:none}label{display:flex;gap:10px;align-items:center}</style>
+<body><h2>🚕 Taxi Panel</h2>
+<form method="POST" action="/update">
+<input name="time" value="${cfg.time}" placeholder="Time e.g. 9:30" required>
+<select name="ampm"><option ${cfg.ampm=='AM'?'selected':''}>AM</option><option ${cfg.ampm=='PM'?'selected':''}>PM</option></select>
+<label><input type="checkbox" name="autoBook" ${cfg.autoBook?'checked':''}> Auto-book (read last 30min)</label>
+<button>Save</button>
+</form>
+<p>Current: <b>${cfg.time} ${cfg.ampm}</b> | Auto: <b>${cfg.autoBook?'ON':'OFF'}</b></p>
+<p><b>Taxi Nos:</b><br>${cfg.taxiNumbers.join('<br>')}<br><br><i>Bot will message taxi number directly in chat like: @${cfg.taxiNumbers[0]} Book at ${cfg.time} ${cfg.ampm}</i></p>
+</body></html>`))
+
+app.post('/update',(req,res)=>{
+  cfg.time=req.body.time; cfg.ampm=req.body.ampm; cfg.autoBook=!!req.body.autoBook; saveCfg();
+  res.redirect('/');
+})
+
+// ---- WHATSAPP BOT ----
 async function start(){
-const client = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-        executablePath: await chromium.executablePath(),
-        args: chromium.args,
-        headless: chromium.headless
-    }
-});
+  const { state, saveCreds } = await useMultiFileAuthState('/data/session')
+  const sock = makeWASocket({ auth: state, printQRInTerminal: false })
+  sock.ev.on('creds.update', saveCreds)
+  
+  sock.ev.on('messages.upsert', async ({messages})=>{
+    const m = messages[0]; if(!m.message || m.key.fromMe) return;
+    const text = m.message.conversation || m.message.extendedTextMessage?.text || ''
+    const senderTime = (m.messageTimestamp*1000)
+    const thirtyAgo = Date.now() - 30*60*1000
 
-client.on('qr', qr => { 
-    console.log('SCAN THIS LINK - OPEN IN BROWSER:');
-    console.log(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`);
-    qrcode.generate(qr, {small: true});
-});
-client.on('ready', async () => {
-    console.log('✅ Bot Ready');
-    const chats = await client.getChats();
-    const group = chats.find(c => c.isGroup && c.name === TAXI_GROUP_NAME);
-    if(group) taxiGroupId = group.id._serialized;
-});
-async function sendPoll(){
-    if(!taxiGroupId) return;
-    const date = new Date().toLocaleDateString('en-GB', {timeZone: TIMEZONE});
-    const poll = new Poll(`Taxi ${date} 9PM LKF?`, ['Yes','No'], { allowMultipleAnswers: false });
-    const sent = await client.sendMessage(taxiGroupId, poll);
-    lastPollId = sent.id._serialized; pollVotes = {};
-}
-async function countAndBook(){
-    const yesCount = Object.values(pollVotes).filter(v=>v==='Yes').length;
-    if(yesCount > 2){
-        const text = `Hi Booking: ${yesCount} pax today 9PM LKF Tower. Confirm pls.`;
-        await client.sendMessage(DRIVER_MO, text);
-        await client.sendMessage(DRIVER_IVAN, text);
-        await client.sendMessage(taxiGroupId, `✅ ${yesCount} pax >2, BOOKED`);
-    } else {
-        if(taxiGroupId) await client.sendMessage(taxiGroupId, `❌ Only ${yesCount} YES. Need >2, no taxi.`);
-    }
-}
-cron.schedule('0 15 * * *', sendPoll, { timezone: TIMEZONE });
-cron.schedule('0 20 * * *', sendPoll, { timezone: TIMEZONE });
-cron.schedule('0 21 * * *', countAndBook, { timezone: TIMEZONE });
-cron.schedule('0 22 * * *', countAndBook, { timezone: TIMEZONE });
+    // Only consider latest 30 mins
+    if(senderTime < thirtyAgo) return;
 
-client.on('vote_update', vote => {
-    const id = vote.parentMessageId || vote.parentMsgId;
-    if(id == lastPollId){
-        pollVotes[vote.voter || vote.sender] = vote.selectedOptions[0]?.name;
+    if(!cfg.autoBook){
+      await sock.sendMessage(m.key.remoteJid,{text:`⏸️ Auto-book OFF. New msg received but not booking. Current time: ${cfg.time} ${cfg.ampm}. Turn ON from panel to auto-book.`})
+      return
     }
-});
-client.on('message', async msg => {
-    if(msg.from === DRIVER_MO || msg.from === DRIVER_IVAN){
-        const name = msg.from === DRIVER_MO? 'Mo' : 'Ivan';
-        if(taxiGroupId) await client.sendMessage(taxiGroupId, `🚕 ${name}: ${msg.body}`);
-    }
-    if(msg.body === '!testpoll') await sendPoll();
-    if(msg.body === '!count') await countAndBook();
-});
-client.initialize();
+
+    // Auto-book logic - book at updated time
+    const taxiJid = cfg.taxiNumbers[0]+'@s.whatsapp.net'
+    await sock.sendMessage(taxiJid,{text:`🚕 Taxi booking: Please book at ${cfg.time} ${cfg.ampm}. Customer: ${m.key.remoteJid}`})
+    await sock.sendMessage(m.key.remoteJid,{text:`✅ Auto-booked taxi at ${cfg.time} ${cfg.ampm}. Messaged taxi number: ${cfg.taxiNumbers[0]} specifically in chat.`})
+  })
+  app.listen(3000,()=>console.log('Panel live'))
 }
-start();
+start()
