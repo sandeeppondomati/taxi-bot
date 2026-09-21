@@ -7,6 +7,8 @@
     "puppeteer-core": "^21.6.1",
     "@sparticuz/chromium": "^119.0.2",
     "qrcode-terminal": "^0.12.0",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "@whiskeysockets/baileys": "^6.7.8",
+    "express": "^4.18.2"
   }
 }
