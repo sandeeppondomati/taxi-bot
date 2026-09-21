@@ -23,7 +23,11 @@ const client = new Client({
     }
 });
 
-client.on('qr', qr => { console.log('SCAN QR:'); qrcode.generate(qr, {small: true}); });
+client.on('qr', qr => { 
+    console.log('SCAN THIS LINK - OPEN IN BROWSER:');
+    console.log(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`);
+    qrcode.generate(qr, {small: true});
+});
 client.on('ready', async () => {
     console.log('✅ Bot Ready');
     const chats = await client.getChats();
