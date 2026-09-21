@@ -3,7 +3,8 @@ const qrcode = require('qrcode-terminal');
 const cron = require('node-cron');
 const chromium = require('@sparticuz/chromium');
 const puppeteer = require('puppeteer-core');
-
+const http = require('http');
+http.createServer((req,res)=>res.end('Bot Running')).listen(process.env.PORT || 3000);
 const TAXI_GROUP_NAME = 'Taxi';
 const DRIVER_MO = '85254776211@c.us';
 const DRIVER_IVAN = '85269900500@c.us';
