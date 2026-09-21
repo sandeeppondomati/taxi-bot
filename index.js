@@ -5,9 +5,9 @@ const app = express()
 app.use(express.urlencoded({extended:true}))
 
 let cfg = { time: '9:00', ampm: 'AM', autoBook: true, taxiNumbers: ['85261234567','85269876543'] }
-try{ if(fs.existsSync('/data/config.json')) cfg = JSON.parse(fs.readFileSync('/data/config.json')) }catch{}
+try{ if(fs.existsSync('./data/config.json')) cfg = JSON.parse(fs.readFileSync('./data/config.json')) }catch(e){}
 
-function saveCfg(){ try{fs.mkdirSync('/data',{recursive:true}); fs.writeFileSync('/data/config.json', JSON.stringify(cfg))}catch{} }
+function saveCfg(){ try{fs.mkdirSync('./data',{recursive:true}); fs.writeFileSync('./data/config.json', JSON.stringify(cfg))}catch(e){console.log(e)}}
 
 // ---- WEB PANEL ----
 app.get('/', (req,res)=> res.send(`
@@ -21,7 +21,7 @@ app.get('/', (req,res)=> res.send(`
 <button>Save</button>
 </form>
 <p>Current: <b>${cfg.time} ${cfg.ampm}</b> | Auto: <b>${cfg.autoBook?'ON':'OFF'}</b></p>
-<p><b>Taxi Nos:</b><br>${cfg.taxiNumbers.join('<br>')}<br><br><i>Bot will message taxi number directly in chat like: @${cfg.taxiNumbers[0]} Book at ${cfg.time} ${cfg.ampm}</i></p>
+<p><b>Taxi Nos:</b><br>${cfg.taxiNumbers.join('<br>')}<br><br><i>Bot will message taxi number directly in chat: @${cfg.taxiNumbers[0]} Book at ${cfg.time} ${cfg.ampm}</i></p>
 </body></html>`))
 
 app.post('/update',(req,res)=>{
@@ -31,8 +31,8 @@ app.post('/update',(req,res)=>{
 
 // ---- WHATSAPP BOT ----
 async function start(){
-  const { state, saveCreds } = await useMultiFileAuthState('/data/session')
-  const sock = makeWASocket({ auth: state, printQRInTerminal: false })
+  const { state, saveCreds } = await useMultiFileAuthState('./session')
+  const sock = makeWASocket({ auth: state })
   sock.ev.on('creds.update', saveCreds)
   
   sock.ev.on('messages.upsert', async ({messages})=>{
@@ -40,20 +40,16 @@ async function start(){
     const text = m.message.conversation || m.message.extendedTextMessage?.text || ''
     const senderTime = (m.messageTimestamp*1000)
     const thirtyAgo = Date.now() - 30*60*1000
-
-    // Only consider latest 30 mins
     if(senderTime < thirtyAgo) return;
-
     if(!cfg.autoBook){
-      await sock.sendMessage(m.key.remoteJid,{text:`⏸️ Auto-book OFF. New msg received but not booking. Current time: ${cfg.time} ${cfg.ampm}. Turn ON from panel to auto-book.`})
+      await sock.sendMessage(m.key.remoteJid,{text:`⏸️ Auto-book OFF. Msg received but not booking. Time: ${cfg.time} ${cfg.ampm}`})
       return
     }
-
-    // Auto-book logic - book at updated time
     const taxiJid = cfg.taxiNumbers[0]+'@s.whatsapp.net'
-    await sock.sendMessage(taxiJid,{text:`🚕 Taxi booking: Please book at ${cfg.time} ${cfg.ampm}. Customer: ${m.key.remoteJid}`})
-    await sock.sendMessage(m.key.remoteJid,{text:`✅ Auto-booked taxi at ${cfg.time} ${cfg.ampm}. Messaged taxi number: ${cfg.taxiNumbers[0]} specifically in chat.`})
+    await sock.sendMessage(taxiJid,{text:`🚕 Taxi booking: Book at ${cfg.time} ${cfg.ampm}. From: ${m.key.remoteJid}`})
+    await sock.sendMessage(m.key.remoteJid,{text:`✅ Auto-booked at ${cfg.time} ${cfg.ampm}. Messaged taxi: ${cfg.taxiNumbers[0]}`})
   })
-  app.listen(3000,()=>console.log('Panel live'))
+  
+  app.listen(3000,()=>console.log('Panel live on 3000'))
 }
 start()
